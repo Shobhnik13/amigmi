@@ -19,7 +19,9 @@
     "src/"
   ],
   "scripts": {
-    "dev": "bun run src/index.ts"
+    "dev": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {},
   "devDependencies": {

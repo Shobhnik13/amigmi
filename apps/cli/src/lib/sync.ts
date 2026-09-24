@@ -1,17 +1,26 @@
-import type { AggregateRecord } from '../types';
+import type { AggregateRecord, SyncMode } from '../types';
 
 const MAX_RETRIES = 3;
 
 export type SyncResponse = {
   ok: boolean;
   records_upserted: number;
+  // Echoed back by the server so the client can tell whether a replace was
+  // honoured. A server that predates the flag omits it, which the caller must
+  // treat as a refusal rather than a success.
+  mode?: SyncMode;
+};
+
+export type PostOptions = {
+  clientVersion?: string;
+  mode?: SyncMode;
 };
 
 export async function postSync(
   token: string,
   apiUrl: string,
   records: AggregateRecord[],
-  clientVersion?: string,
+  options: PostOptions = {},
 ): Promise<SyncResponse> {
   let lastError: Error | null = null;
 
@@ -22,13 +31,17 @@ export async function postSync(
       const res = await fetch(`${apiUrl}/api/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ records, client_version: clientVersion }),
+        body: JSON.stringify({
+          records,
+          client_version: options.clientVersion,
+          mode: options.mode ?? 'append',
+        }),
       });
 
       if (res.status === 401) throw new Error('KEY_INVALID');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      return res.json() as Promise<SyncResponse>;
+      return (await res.json()) as SyncResponse;
     } catch (err) {
       lastError = err as Error;
       if ((err as Error).message === 'KEY_INVALID') throw err;

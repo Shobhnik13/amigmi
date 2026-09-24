@@ -1,9 +1,6 @@
 import { loadAuth, loadState, saveState } from './lib/state';
-import { createAggMap, aggToRecords } from './lib/aggregate';
+import { collect, warnUnpriced } from './lib/collect';
 import { postSync } from './lib/sync';
-import { parseClaude } from './parsers/claude';
-import { parseOpencode } from './parsers/opencode';
-import { parseCodex } from './parsers/codex';
 
 async function run() {
   const auth = loadAuth();
@@ -12,34 +9,21 @@ async function run() {
     process.exit(1);
   }
 
-  const state = loadState();
-  const cursors = state.cursors;
-  const agg = createAggMap();
+  const { records, state, unpriced } = await collect(loadState());
 
-  const [claudeCursors, opencodeCursor, codexCursors] = await Promise.all([
-    parseClaude(agg, cursors.claude_code ?? {}),
-    parseOpencode(agg, cursors.opencode?.last_timestamp ?? new Date(0).toISOString()),
-    parseCodex(agg, cursors.codex ?? {}),
-  ]);
-
-  const records = aggToRecords(agg);
-
+  // Push before persisting: if the upload fails we keep the old cursors and
+  // retry the same range next run rather than losing it.
   const result = await postSync(auth.token, auth.api_url, records);
 
-  await saveState({
-    cursors: {
-      claude_code: claudeCursors,
-      opencode: { last_timestamp: opencodeCursor },
-      codex: codexCursors,
-    },
-    last_sync_at: new Date().toISOString(),
-  });
+  await saveState({ ...state, last_sync_at: new Date().toISOString() });
 
   if (records.length === 0) {
     console.log('Nothing new to sync');
   } else {
     console.log(`Synced ${result.records_upserted} records`);
   }
+
+  warnUnpriced(unpriced);
 }
 
 run().catch((err) => {

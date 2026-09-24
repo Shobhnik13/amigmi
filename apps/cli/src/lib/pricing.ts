@@ -1,127 +1,166 @@
+import type { Usage } from '../types';
+
 // All rates per 1M tokens in USD
 // Source: https://anthropic.com/pricing
-// cacheWrite uses 5-minute write rate (1.25x base input)
 
-const RATES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
-  // Claude Fable 5 / Mythos 5 ($10 input, $50 output)
-  'claude-fable-5':    { input: 10.00, output: 50.00, cacheRead: 1.00,  cacheWrite: 12.50 },
-  'claude-mythos-5':   { input: 10.00, output: 50.00, cacheRead: 1.00,  cacheWrite: 12.50 },
+export type Rate = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  /** 5-minute TTL cache write — 1.25x base input */
+  cacheWrite5m: number;
+  /** 1-hour TTL cache write — 2x base input */
+  cacheWrite1h: number;
+};
 
-  // Claude Opus 5 ($5 input, $25 output)
-  'claude-opus-5':     { input: 5.00,  output: 25.00, cacheRead: 0.50,  cacheWrite: 6.25  },
+// Anthropic cache writes are fixed multiples of the base input rate: 1.25x for
+// the 5m TTL and 2x for the 1h TTL. Deriving them avoids transcription drift
+// when a model is added.
+//
+// Cache reads are usually 0.1x input, but not always — Opus 5.5 reads at 0.05x —
+// so pass cacheRead explicitly whenever the published rate is not a tenth.
+const anthropic = (input: number, output: number, cacheRead = input * 0.1): Rate => ({
+  input,
+  output,
+  cacheRead,
+  cacheWrite5m: input * 1.25,
+  cacheWrite1h: input * 2,
+});
 
-  // Claude Sonnet 5 ($3 input, $15 output; intro $2/$10 through 2026-08-31)
-  'claude-sonnet-5':   { input: 3.00,  output: 15.00, cacheRead: 0.30,  cacheWrite: 3.75  },
+// Providers that bill cache reads but not cache writes.
+const flat = (input: number, output: number, cacheRead = 0): Rate => ({
+  input,
+  output,
+  cacheRead,
+  cacheWrite5m: 0,
+  cacheWrite1h: 0,
+});
 
-  // Claude Opus 4.x ($5 input, $25 output)
-  'claude-opus-4-8':   { input: 5.00,  output: 25.00, cacheRead: 0.50,  cacheWrite: 6.25  },
-  'claude-opus-4-7':   { input: 5.00,  output: 25.00, cacheRead: 0.50,  cacheWrite: 6.25  },
-  'claude-opus-4-6':   { input: 5.00,  output: 25.00, cacheRead: 0.50,  cacheWrite: 6.25  },
-  'claude-opus-4-5':   { input: 5.00,  output: 25.00, cacheRead: 0.50,  cacheWrite: 6.25  },
+const RATES: Record<string, Rate> = {
+  // Claude Fable 5 / Mythos 5
+  'claude-fable-5':    anthropic(10.00, 50.00),
+  'claude-mythos-5':   anthropic(10.00, 50.00),
 
-  // Claude Opus 4.1 / legacy ($15 input, $75 output)
-  'claude-opus-4-1':   { input: 15.00, output: 75.00, cacheRead: 1.50,  cacheWrite: 18.75 },
-  'claude-opus-4-0':   { input: 15.00, output: 75.00, cacheRead: 1.50,  cacheWrite: 18.75 },
+  // Claude Opus 5.5 — cache reads are 0.05x input, not the usual 0.1x
+  'claude-opus-5-5':   anthropic(4.00, 20.00, 0.20),
 
-  // Claude Sonnet 4.x ($3 input, $15 output)
-  'claude-sonnet-4-6': { input: 3.00,  output: 15.00, cacheRead: 0.30,  cacheWrite: 3.75  },
-  'claude-sonnet-4-5': { input: 3.00,  output: 15.00, cacheRead: 0.30,  cacheWrite: 3.75  },
-  'claude-sonnet-4-0': { input: 3.00,  output: 15.00, cacheRead: 0.30,  cacheWrite: 3.75  },
+  // Claude Opus 5
+  'claude-opus-5':     anthropic(5.00, 25.00),
 
-  // Claude Haiku 4.5 ($1 input, $5 output)
-  'claude-haiku-4-5':  { input: 1.00,  output: 5.00,  cacheRead: 0.10,  cacheWrite: 1.25  },
+  // Claude Sonnet 5
+  'claude-sonnet-5':   anthropic(3.00, 15.00),
 
-  // Claude Haiku 3.5 ($0.80 input, $4 output)
-  'claude-haiku-3-5':  { input: 0.80,  output: 4.00,  cacheRead: 0.08,  cacheWrite: 1.00  },
-  'claude-3-5-haiku-20241022': { input: 0.80, output: 4.00, cacheRead: 0.08, cacheWrite: 1.00 },
+  // Claude Opus 4.x
+  'claude-opus-4-8':   anthropic(5.00, 25.00),
+  'claude-opus-4-7':   anthropic(5.00, 25.00),
+  'claude-opus-4-6':   anthropic(5.00, 25.00),
+  'claude-opus-4-5':   anthropic(5.00, 25.00),
 
-  // Legacy Claude 3 models
-  'claude-3-5-sonnet-20241022': { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
-  'claude-3-opus-20240229':     { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
+  // Claude Opus 4.1 / legacy
+  'claude-opus-4-1':   anthropic(15.00, 75.00),
+  'claude-opus-4-0':   anthropic(15.00, 75.00),
+
+  // Claude Sonnet 4.x
+  'claude-sonnet-4-6': anthropic(3.00, 15.00),
+  'claude-sonnet-4-5': anthropic(3.00, 15.00),
+  'claude-sonnet-4-0': anthropic(3.00, 15.00),
+
+  // Claude Haiku
+  'claude-haiku-4-5':  anthropic(1.00, 5.00),
+  'claude-haiku-3-5':  anthropic(0.80, 4.00),
+  'claude-3-5-haiku-20241022': anthropic(0.80, 4.00),
+
+  // Legacy Claude 3
+  'claude-3-5-sonnet-20241022': anthropic(3.00, 15.00),
+  'claude-3-opus-20240229':     anthropic(15.00, 75.00),
 
   // OpenAI (source: developers.openai.com/api/docs/pricing)
   // GPT-5.6 family — 1.05M context. Requests over 272K input tokens bill at 2x input / 1.5x output.
-  'gpt-5.6-sol':     { input: 5.00,  output: 30.00, cacheRead: 0.50,  cacheWrite: 0.00 },
-  'gpt-5.6-terra':   { input: 2.00,  output: 12.00, cacheRead: 0.20,  cacheWrite: 0.00 },
-  'gpt-5.6-luna':    { input: 0.20,  output: 1.20,  cacheRead: 0.02,  cacheWrite: 0.00 },
+  'gpt-5.6-sol':     flat(5.00,  30.00,  0.50),
+  'gpt-5.6-terra':   flat(2.00,  12.00,  0.20),
+  'gpt-5.6-luna':    flat(0.20,  1.20,   0.02),
 
-  'gpt-5.5':         { input: 5.00,  output: 30.00, cacheRead: 0.50,  cacheWrite: 0.00 },
-  'gpt-5.5-pro':     { input: 30.00, output: 180.00, cacheRead: 0.00, cacheWrite: 0.00 },
-  'gpt-5.4':         { input: 2.50,  output: 15.00, cacheRead: 0.25,  cacheWrite: 0.00 },
-  'gpt-5.4-mini':    { input: 0.75,  output: 4.50,  cacheRead: 0.075, cacheWrite: 0.00 },
-  'gpt-5.4-nano':    { input: 0.20,  output: 1.25,  cacheRead: 0.02,  cacheWrite: 0.00 },
-  'gpt-5.3-codex':   { input: 1.75,  output: 14.00, cacheRead: 0.175, cacheWrite: 0.00 },
+  'gpt-5.5':         flat(5.00,  30.00,  0.50),
+  'gpt-5.5-pro':     flat(30.00, 180.00, 0.00),
+  'gpt-5.4':         flat(2.50,  15.00,  0.25),
+  'gpt-5.4-mini':    flat(0.75,  4.50,   0.075),
+  'gpt-5.4-nano':    flat(0.20,  1.25,   0.02),
+  'gpt-5.3-codex':   flat(1.75,  14.00,  0.175),
   // Legacy OpenAI models
-  'gpt-4o':          { input: 2.50,  output: 10.00, cacheRead: 1.25,  cacheWrite: 0.00 },
-  'gpt-4o-mini':     { input: 0.15,  output: 0.60,  cacheRead: 0.075, cacheWrite: 0.00 },
-  'o3':              { input: 10.00, output: 40.00, cacheRead: 2.50,  cacheWrite: 0.00 },
-  'o4-mini':         { input: 1.10,  output: 4.40,  cacheRead: 0.275, cacheWrite: 0.00 },
+  'gpt-4o':          flat(2.50,  10.00,  1.25),
+  'gpt-4o-mini':     flat(0.15,  0.60,   0.075),
+  'o3':              flat(10.00, 40.00,  2.50),
+  'o4-mini':         flat(1.10,  4.40,   0.275),
 
   // Google Gemini (source: ai.google.dev/pricing)
-  'gemini-2.5-pro':          { input: 1.25,  output: 10.00, cacheRead: 0.31,  cacheWrite: 0.00 },
-  'gemini-2.5-flash':        { input: 0.15,  output: 0.60,  cacheRead: 0.0375, cacheWrite: 0.00 },
-  'gemini-2.5-flash-lite':   { input: 0.10,  output: 0.40,  cacheRead: 0.025,  cacheWrite: 0.00 },
-  'gemini-2.0-flash':        { input: 0.10,  output: 0.40,  cacheRead: 0.025,  cacheWrite: 0.00 },
-  'gemini-2.0-flash-lite':   { input: 0.075, output: 0.30,  cacheRead: 0.01875, cacheWrite: 0.00 },
-  'gemini-1.5-pro':          { input: 1.25,  output: 5.00,  cacheRead: 0.3125, cacheWrite: 0.00 },
-  'gemini-1.5-flash':        { input: 0.075, output: 0.30,  cacheRead: 0.01875, cacheWrite: 0.00 },
+  'gemini-2.5-pro':          flat(1.25,  10.00, 0.31),
+  'gemini-2.5-flash':        flat(0.15,  0.60,  0.0375),
+  'gemini-2.5-flash-lite':   flat(0.10,  0.40,  0.025),
+  'gemini-2.0-flash':        flat(0.10,  0.40,  0.025),
+  'gemini-2.0-flash-lite':   flat(0.075, 0.30,  0.01875),
+  'gemini-1.5-pro':          flat(1.25,  5.00,  0.3125),
+  'gemini-1.5-flash':        flat(0.075, 0.30,  0.01875),
 
   // DeepSeek (source: api-docs.deepseek.com/quick_start/pricing)
-  'deepseek-chat':      { input: 0.27,  output: 1.10,  cacheRead: 0.07,  cacheWrite: 0.00 },
-  'deepseek-reasoner':  { input: 0.55,  output: 2.19,  cacheRead: 0.14,  cacheWrite: 0.00 },
+  'deepseek-chat':      flat(0.27, 1.10, 0.07),
+  'deepseek-reasoner':  flat(0.55, 2.19, 0.14),
 
   // Mistral (source: mistral.ai/pricing)
-  'mistral-large-latest':   { input: 2.00, output: 6.00,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'mistral-medium-latest':  { input: 0.40, output: 2.00,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'mistral-small-latest':   { input: 0.10, output: 0.30,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'codestral-latest':       { input: 0.20, output: 0.60,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'ministral-8b-latest':    { input: 0.10, output: 0.10,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'ministral-3b-latest':    { input: 0.04, output: 0.04,  cacheRead: 0.00, cacheWrite: 0.00 },
+  'mistral-large-latest':   flat(2.00, 6.00),
+  'mistral-medium-latest':  flat(0.40, 2.00),
+  'mistral-small-latest':   flat(0.10, 0.30),
+  'codestral-latest':       flat(0.20, 0.60),
+  'ministral-8b-latest':    flat(0.10, 0.10),
+  'ministral-3b-latest':    flat(0.04, 0.04),
 
   // xAI Grok (source: x.ai/api)
-  'grok-3':         { input: 3.00,  output: 15.00, cacheRead: 0.00, cacheWrite: 0.00 },
-  'grok-3-fast':    { input: 0.60,  output: 4.00,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'grok-3-mini':    { input: 0.30,  output: 0.50,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'grok-2':         { input: 2.00,  output: 10.00, cacheRead: 0.00, cacheWrite: 0.00 },
-  'grok-2-mini':    { input: 0.20,  output: 0.50,  cacheRead: 0.00, cacheWrite: 0.00 },
+  'grok-3':         flat(3.00, 15.00),
+  'grok-3-fast':    flat(0.60, 4.00),
+  'grok-3-mini':    flat(0.30, 0.50),
+  'grok-2':         flat(2.00, 10.00),
+  'grok-2-mini':    flat(0.20, 0.50),
 
   // Alibaba Qwen (source: help.aliyun.com/qwen-api-pricing)
-  'qwen-max':         { input: 1.60, output: 6.40,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'qwen-plus':        { input: 0.40, output: 1.20,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'qwen-turbo':       { input: 0.05, output: 0.20,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'qwen-long':        { input: 0.05, output: 0.20,  cacheRead: 0.00, cacheWrite: 0.00 },
+  'qwen-max':         flat(1.60, 6.40),
+  'qwen-plus':        flat(0.40, 1.20),
+  'qwen-turbo':       flat(0.05, 0.20),
+  'qwen-long':        flat(0.05, 0.20),
 
   // Moonshot (Kimi) (source: platform.moonshot.cn/pricing)
-  'moonshot-v1-8k':   { input: 0.12, output: 0.12,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'moonshot-v1-32k':  { input: 0.24, output: 0.24,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'moonshot-v1-128k': { input: 0.90, output: 0.90,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'kimi-k2':          { input: 0.60, output: 2.50,  cacheRead: 0.07, cacheWrite: 0.00 },
+  'moonshot-v1-8k':   flat(0.12, 0.12),
+  'moonshot-v1-32k':  flat(0.24, 0.24),
+  'moonshot-v1-128k': flat(0.90, 0.90),
+  'kimi-k2':          flat(0.60, 2.50, 0.07),
 
   // Zhipu GLM (source: bigmodel.cn/pricing)
-  'glm-4':            { input: 0.14, output: 0.14,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'glm-4-flash':      { input: 0.00, output: 0.00,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'glm-4-plus':       { input: 0.70, output: 0.70,  cacheRead: 0.00, cacheWrite: 0.00 },
-  'glm-z1':           { input: 0.14, output: 0.14,  cacheRead: 0.00, cacheWrite: 0.00 },
+  'glm-4':            flat(0.14, 0.14),
+  'glm-4-flash':      flat(0.00, 0.00),
+  'glm-4-plus':       flat(0.70, 0.70),
+  'glm-z1':           flat(0.14, 0.14),
 };
+
+// Models we know are genuinely free, so a $0 cost is correct rather than a
+// missing rate. Keeps them out of the unpriced-model warning.
+const FREE_MODELS = new Set(['glm-4-flash']);
 
 // Strip trailing date suffix e.g. claude-haiku-4-5-20251001 → claude-haiku-4-5
 export function normalizeModel(model: string): string {
   return model.replace(/-\d{8}$/, '');
 }
 
-export function calcCost(
-  model: string,
-  inputTokens: number,
-  outputTokens: number,
-  cacheReadTokens: number,
-  cacheWriteTokens: number,
-): number {
+export function isPriced(model: string): boolean {
+  const m = normalizeModel(model);
+  return m in RATES || FREE_MODELS.has(m);
+}
+
+export function calcCost(model: string, u: Usage): number {
   const r = RATES[normalizeModel(model)];
   if (!r) return 0;
   return (
-    (inputTokens      / 1_000_000) * r.input +
-    (outputTokens     / 1_000_000) * r.output +
-    (cacheReadTokens  / 1_000_000) * r.cacheRead +
-    (cacheWriteTokens / 1_000_000) * r.cacheWrite
+    (u.input        / 1_000_000) * r.input +
+    (u.output       / 1_000_000) * r.output +
+    (u.cacheRead    / 1_000_000) * r.cacheRead +
+    (u.cacheWrite5m / 1_000_000) * r.cacheWrite5m +
+    (u.cacheWrite1h / 1_000_000) * r.cacheWrite1h
   );
 }

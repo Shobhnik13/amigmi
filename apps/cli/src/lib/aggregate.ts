@@ -1,6 +1,11 @@
 import type { Agent, AggregateRecord } from '../types';
 
-export type AggMap = Map<string, AggregateRecord>;
+// Cost is kept as a number while aggregating and only formatted on the way out.
+// Rounding to 6dp on every add re-rounds the running total once per response,
+// which drifts by a cent or so across a few thousand of them.
+type AggRow = Omit<AggregateRecord, 'cost_usd'> & { cost_usd: number };
+
+export type AggMap = Map<string, AggRow>;
 
 export function createAggMap(): AggMap {
   return new Map();
@@ -27,7 +32,7 @@ export function addToAgg(
     existing.output_tokens += tokens.output;
     existing.cache_read_tokens += tokens.cache_read;
     existing.cache_write_tokens += tokens.cache_write;
-    existing.cost_usd = (parseFloat(existing.cost_usd) + tokens.cost_usd).toFixed(6);
+    existing.cost_usd += tokens.cost_usd;
   } else {
     map.set(key, {
       agent,
@@ -37,11 +42,11 @@ export function addToAgg(
       output_tokens: tokens.output,
       cache_read_tokens: tokens.cache_read,
       cache_write_tokens: tokens.cache_write,
-      cost_usd: tokens.cost_usd.toFixed(6),
+      cost_usd: tokens.cost_usd,
     });
   }
 }
 
 export function aggToRecords(map: AggMap): AggregateRecord[] {
-  return Array.from(map.values());
+  return Array.from(map.values(), (r) => ({ ...r, cost_usd: r.cost_usd.toFixed(6) }));
 }
