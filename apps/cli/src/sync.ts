@@ -1,9 +1,7 @@
 import { loadAuth, loadState, saveState } from './lib/state';
-import { createAggMap, aggToRecords } from './lib/aggregate';
+import { collect, warnUnpriced } from './lib/collect';
+import { needsMigration, STATE_VERSION } from './lib/migration';
 import { postSync } from './lib/sync';
-import { parseClaude } from './parsers/claude';
-import { parseOpencode } from './parsers/opencode';
-import { parseCodex } from './parsers/codex';
 
 async function run() {
   const auth = loadAuth();
@@ -13,33 +11,48 @@ async function run() {
   }
 
   const state = loadState();
-  const cursors = state.cursors;
-  const agg = createAggMap();
+  const migrating = needsMigration(state);
 
-  const [claudeCursors, opencodeCursor, codexCursors] = await Promise.all([
-    parseClaude(agg, cursors.claude_code ?? {}),
-    parseOpencode(agg, cursors.opencode?.last_timestamp ?? new Date(0).toISOString()),
-    parseCodex(agg, cursors.codex ?? {}),
-  ]);
+  if (migrating) {
+    console.log('Correcting previously synced totals (one time, this may take a moment)...');
+  }
 
-  const records = aggToRecords(agg);
+  // Migrating starts from empty state, so every transcript is rescanned from the
+  // beginning and the records are absolute totals rather than the usual delta.
+  const { records, state: next, unpriced } = await collect(migrating ? {} : state);
+  const mode = migrating ? 'replace' : 'append';
 
-  const result = await postSync(auth.token, auth.api_url, records);
+  // Push before persisting: if the upload fails we keep the old cursors and
+  // retry the same range next run rather than losing it.
+  const result = await postSync(auth.token, auth.api_url, records, { mode });
+
+  // Absolute totals added to what is already stored would double it, so a server
+  // that ignores the flag must not be treated as success. Leaving state untouched
+  // means the next sync simply tries the migration again.
+  if (migrating && records.length > 0 && result.mode !== 'replace') {
+    console.error(
+      'This version corrects totals that were previously over-counted, which needs\n' +
+        'a server that supports replacing them. Nothing was changed. Try again later —\n' +
+        'your usage is still recorded locally and will sync once the server is updated.',
+    );
+    process.exit(1);
+  }
 
   await saveState({
-    cursors: {
-      claude_code: claudeCursors,
-      opencode: { last_timestamp: opencodeCursor },
-      codex: codexCursors,
-    },
+    ...next,
+    schema_version: STATE_VERSION,
     last_sync_at: new Date().toISOString(),
   });
 
-  if (records.length === 0) {
+  if (migrating) {
+    console.log(`Corrected ${result.records_upserted} records`);
+  } else if (records.length === 0) {
     console.log('Nothing new to sync');
   } else {
     console.log(`Synced ${result.records_upserted} records`);
   }
+
+  warnUnpriced(unpriced);
 }
 
 run().catch((err) => {

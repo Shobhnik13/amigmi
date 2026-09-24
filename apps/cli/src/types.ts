@@ -7,18 +7,47 @@ export type AggregateRecord = {
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
-  cache_write_tokens: number;
+  cache_write_tokens: number;   // 5m + 1h combined; cost_usd prices them separately
   cost_usd: string;
 };
+
+// How the server should apply a batch of records.
+//   append  — add the record's totals to whatever the (agent, date, model) row
+//             already holds. Normal incremental sync: the client only ever sends
+//             the delta it has not sent before.
+//   replace — overwrite that row outright. Used by the one-time migration in
+//             sync.ts, which rescans every transcript from byte 0 and therefore
+//             sends absolute totals, not deltas.
+export type SyncMode = 'append' | 'replace';
 
 export type Cursors = {
   claude_code: Record<string, number>;  // file path → byte offset
   codex: Record<string, number>;        // file path → byte offset
-  opencode: { last_timestamp: string }; // ISO timestamp
+  opencode: { last_timestamp: string }; // ISO timestamp of the newest row seen
 };
 
+export type Usage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+};
+
+// Usage already counted per billed response, bucketed by date so old buckets can
+// be pruned. Stored as [input, output, cacheRead, cacheWrite5m, cacheWrite1h] to
+// keep state.json compact. See lib/ledger.ts for why the counts are kept rather
+// than just the ids.
+export type LedgerEntry = [number, number, number, number, number];
+export type LedgerState = Record<string, Record<string, LedgerEntry>>;
+
 export type State = {
+  // Bumped when a parser fix makes previously-pushed totals wrong. A state file
+  // behind the current version triggers a one-time rescan-and-replace on the
+  // next sync. Absent means 0, i.e. everything written before versioning.
+  schema_version?: number;
   cursors: Partial<Cursors>;
+  counted?: { claude_code?: LedgerState; opencode?: LedgerState };
   last_sync_at: string | null;
 };
 

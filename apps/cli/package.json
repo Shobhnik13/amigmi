@@ -1,6 +1,6 @@
 {
   "name": "amigmi",
-  "version": "0.0.5",
+  "version": "0.1.0",
   "description": "Track your AI coding tool spend and compete on the global leaderboard",
   "license": "MIT",
   "author": "Shobhnik13",
@@ -16,10 +16,13 @@
     "amigmi": "./src/index.ts"
   },
   "files": [
-    "src/"
+    "src/",
+    "!src/__tests__/"
   ],
   "scripts": {
-    "dev": "bun run src/index.ts"
+    "dev": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {},
   "devDependencies": {
