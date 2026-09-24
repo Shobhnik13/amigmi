@@ -15,9 +15,9 @@ export type AggregateRecord = {
 //   append  — add the record's totals to whatever the (agent, date, model) row
 //             already holds. Normal incremental sync: the client only ever sends
 //             the delta it has not sent before.
-//   replace — overwrite that row outright. Only used by `amigmi backfill`, which
-//             rescans every transcript from byte 0 and therefore sends absolute
-//             totals, not deltas.
+//   replace — overwrite that row outright. Used by the one-time migration in
+//             sync.ts, which rescans every transcript from byte 0 and therefore
+//             sends absolute totals, not deltas.
 export type SyncMode = 'append' | 'replace';
 
 export type Cursors = {
@@ -42,6 +42,10 @@ export type LedgerEntry = [number, number, number, number, number];
 export type LedgerState = Record<string, Record<string, LedgerEntry>>;
 
 export type State = {
+  // Bumped when a parser fix makes previously-pushed totals wrong. A state file
+  // behind the current version triggers a one-time rescan-and-replace on the
+  // next sync. Absent means 0, i.e. everything written before versioning.
+  schema_version?: number;
   cursors: Partial<Cursors>;
   counted?: { claude_code?: LedgerState; opencode?: LedgerState };
   last_sync_at: string | null;

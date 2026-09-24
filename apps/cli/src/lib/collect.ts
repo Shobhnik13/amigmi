@@ -14,7 +14,8 @@ const EPOCH = new Date(0).toISOString();
 
 // Runs every parser against the given starting state and returns the records to
 // push alongside the state to persist once the push succeeds. Passing an empty
-// state rescans every source from the beginning, which is what backfill needs.
+// state rescans every source from the beginning, which is what the one-time
+// migration in sync.ts does.
 export async function collect(state: Partial<State> = {}): Promise<Collected> {
   const cursors = state.cursors ?? {};
   const counted = state.counted ?? {};
